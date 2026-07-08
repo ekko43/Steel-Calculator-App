@@ -1,0 +1,58 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    name: Build APK with Buildozer (official Docker image)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Make workspace writable inside the container
+        # The Buildozer image builds as a non-root user with a fixed UID.
+        # Loosening permissions on the checked-out copy avoids Permission
+        # denied errors when it writes .buildozer/ and bin/ back to us.
+        run: chmod -R 777 "${{ github.workspace }}"
+
+      - name: Prepare Buildozer global cache dir
+        run: mkdir -p "${{ runner.temp }}/buildozer-global" && chmod -R 777 "${{ runner.temp }}/buildozer-global"
+
+      - name: Cache Buildozer global directory (Android SDK/NDK)
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/buildozer-global
+          key: buildozer-global-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            buildozer-global-${{ runner.os }}-
+
+      - name: Pull official Buildozer image
+        run: docker pull kivy/buildozer:latest
+
+      - name: Build APK
+        run: |
+          docker run --rm \
+            --volume "${{ runner.temp }}/buildozer-global":/home/user/.buildozer \
+            --volume "${{ github.workspace }}":/home/user/hostcwd \
+            kivy/buildozer android debug
+
+      - name: Locate built APK
+        id: find_apk
+        run: |
+          APK_PATH=$(find "${{ github.workspace }}/bin" -name "*.apk" | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            echo "No APK found in bin/ — check the build logs above."
+            exit 1
+          fi
+          echo "Found: $APK_PATH"
+          echo "apk_path=$APK_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: steel-checker-apk
+          path: ${{ steps.find_apk.outputs.apk_path }}
