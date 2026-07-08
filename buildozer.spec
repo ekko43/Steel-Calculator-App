@@ -22,8 +22,8 @@ version = 1.0
 # core.py only needs the stdlib 'math' module, so kivy is the only dependency.
 requirements = python3,kivy==2.3.1
 
-# (str) Presplash / icon — add your own png files here later if you want branding
-# icon.filename = %(source.dir)s/icon.png
+# (str) Icon of the application
+icon.filename = %(source.dir)s/assets/icon.png
 
 # (str) Supported orientation (portrait, landscape, all)
 orientation = portrait
