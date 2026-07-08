@@ -12,18 +12,15 @@ from kivy.app import App
 from kivy.lang import Builder
 from kivy.core.window import Window
 from kivy.metrics import dp
-from kivy.properties import StringProperty, BooleanProperty, ObjectProperty
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.screenmanager import Screen, ScreenManager, NoTransition
 from kivy.uix.popup import Popup
-from kivy.uix.recycleview import RecycleView
-from kivy.uix.behaviors import FocusBehavior
-from kivy.uix.recycleview.layout import LayoutSelectionBehavior
-from kivy.uix.recycleboxlayout import RecycleBoxLayout
-from kivy.uix.recycleview.views import RecycleDataViewBehavior
+from kivy.uix.scrollview import ScrollView
+from kivy.uix.gridlayout import GridLayout
 from kivy.uix.button import Button
 from kivy.uix.togglebutton import ToggleButton
 from kivy.uix.textinput import TextInput
+from kivy.uix.label import Label
 
 # ─────────────────────────────────────────────
 #  THEME
@@ -107,16 +104,6 @@ KV = f"""
     orientation: 'vertical'
     size_hint_y: None
     height: self.minimum_height
-
-<SectionRow>:
-    size_hint_y: None
-    height: dp(46)
-    canvas.before:
-        Color:
-            rgba: (0.35,0.45,0.75,0.35) if root.selected else (0,0,0,0)
-        Rectangle:
-            pos: self.pos
-            size: self.size
 """
 Builder.load_string(KV)
 
@@ -128,43 +115,16 @@ def rgba(hexstr, a=1):
 # ─────────────────────────────────────────────
 #  SECTION PICKER POPUP (search + list)
 # ─────────────────────────────────────────────
-class SectionRow(RecycleDataViewBehavior, Button):
-    index = None
-    selected = BooleanProperty(False)
-    section_name = StringProperty("")
-    callback = ObjectProperty(None)
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.background_normal = ""
-        self.background_down = ""
-        self.background_color = rgba(PANEL)
-        self.color = rgba(TEXT)
-        self.size_hint_y = None
-        self.height = dp(44)
-
-    def refresh_view_attrs(self, rv, index, data):
-        self.index = index
-        self.section_name = data.get("text", "")
-        self.text = self.section_name
-        self.callback = data.get("callback")
-        return super().refresh_view_attrs(rv, index, data)
-
-    def on_release(self):
-        if self.callback:
-            self.callback(self.section_name)
-
-
-class SectionRV(RecycleView):
-    pass
-
-
-class SelectableRecycleBoxLayout(FocusBehavior, LayoutSelectionBehavior, RecycleBoxLayout):
-    pass
-
-
 class SectionPicker(BoxLayout):
-    """A button that opens a searchable popup list of section names."""
+    """A button that opens a searchable popup list of section names.
+
+    Uses a plain ScrollView + GridLayout of buttons rather than
+    RecycleView: simpler and more predictable across devices, at the
+    cost of building more widgets up front. To keep that cheap, the
+    unfiltered view is capped and typing narrows it down.
+    """
+
+    MAX_UNFILTERED = 150
 
     def __init__(self, names, on_select, placeholder="Select section", **kwargs):
         super().__init__(orientation="vertical", size_hint_y=None, height=dp(46), **kwargs)
@@ -172,8 +132,7 @@ class SectionPicker(BoxLayout):
         self.on_select_cb = on_select
         self.placeholder = placeholder
         self.chosen = None
-        from kivy.uix.button import Button as KButton
-        self.btn = KButton(
+        self.btn = Button(
             text=placeholder,
             size_hint_y=None,
             height=dp(46),
@@ -191,21 +150,16 @@ class SectionPicker(BoxLayout):
         search = FieldInputPlain(hint_text="Search section...")
         content.add_widget(search)
 
-        rv = SectionRV(size_hint=(1, 1))
-        rv.viewclass = "SectionRow"
-        box = SelectableRecycleBoxLayout(
-            default_size=(None, dp(44)),
-            default_size_hint=(1, None),
-            size_hint_y=None,
-            orientation="vertical",
-        )
-        box.bind(minimum_height=box.setter("height"))
-        rv.add_widget(box)
+        scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False)
+        grid = GridLayout(cols=1, size_hint_y=None, spacing=dp(2))
+        grid.bind(minimum_height=grid.setter("height"))
+        scroll.add_widget(grid)
+        content.add_widget(scroll)
 
         popup = Popup(
             title=self.placeholder,
             content=content,
-            size_hint=(0.9, 0.85),
+            size_hint=(0.92, 0.88),
             title_color=rgba(ACCENT),
             separator_color=rgba(ACCENT),
             background_color=rgba(BG),
@@ -218,15 +172,45 @@ class SectionPicker(BoxLayout):
             if self.on_select_cb:
                 self.on_select_cb(name)
 
-        rv.data = [{"text": n, "callback": do_select} for n in self.names]
+        def populate(filter_text=""):
+            grid.clear_widgets()
+            t = filter_text.strip().upper()
+            if t:
+                shown = [n for n in self.names if t in n.upper()]
+            else:
+                shown = self.names[: self.MAX_UNFILTERED]
 
-        def filter_list(instance, text):
-            t = text.strip().upper()
-            filtered = [n for n in self.names if t in n.upper()] if t else self.names
-            rv.data = [{"text": n, "callback": do_select} for n in filtered]
+            if not shown:
+                grid.add_widget(Label(
+                    text="No matches.", color=rgba(SUBTEXT),
+                    size_hint_y=None, height=dp(40), font_size="14sp",
+                ))
+                return
 
-        search.bind(text=filter_list)
+            for n in shown:
+                row_btn = Button(
+                    text=n,
+                    size_hint_y=None,
+                    height=dp(44),
+                    background_normal="",
+                    background_down="",
+                    background_color=rgba(PANEL),
+                    color=rgba(TEXT),
+                    font_size="14sp",
+                )
+                row_btn.bind(on_release=lambda inst, nm=n: do_select(nm))
+                grid.add_widget(row_btn)
+
+            if not t and len(self.names) > self.MAX_UNFILTERED:
+                grid.add_widget(Label(
+                    text=f"...{len(self.names) - self.MAX_UNFILTERED} more — type to search",
+                    color=rgba(SUBTEXT), size_hint_y=None, height=dp(34), font_size="12sp",
+                ))
+
+        populate()
+        search.bind(text=lambda inst, val: populate(val))
         popup.open()
+
 
 
 class FieldInputPlain(TextInput):
